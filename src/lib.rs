@@ -534,16 +534,16 @@ pub mod rust_impl {
 
                 'series_loop: for aa in a.iter_mut() {
                     p /= z;
-                    let ab = aa;
+                    let ab = *aa;
                     *aa += p;
-                    if aa == ab {
+                    if *aa == ab {
                         break 'series_loop;
                     }
                     if !l {
                         q /= s;
-                        let ab_q = aa;
+                        let ab_q = *aa;
                         *aa += q;
-                        if aa == ab_q {
+                        if *aa == ab_q {
                             l = true;
                         }
                     }
@@ -860,10 +860,9 @@ mod tests {
                 ) => {
                     assert!((value - c_value).abs() < FLOAT_TOLERANCE);
                 }
-                _ => assert!(
-                    false,
-                    "Mismatched distribution types between Rust and C implementations"
-                ),
+                _ => {
+                    unreachable!("Mismatched distribution types between Rust and C implementations")
+                }
             }
         }
     }
@@ -940,8 +939,8 @@ mod tests {
             let original_res = rust_impl::mom_original(g, d).unwrap();
             let gauss_res = rust_impl::mom_gauss_hermite(g, d).unwrap();
 
-            println!("Original: {:?}", original_res);
-            println!("Gauss-H:  {:?}", gauss_res);
+            println!("Original: {original_res:?}");
+            println!("Gauss-H:  {gauss_res:?}");
 
             for i in 0..6 {
                 assert!(
