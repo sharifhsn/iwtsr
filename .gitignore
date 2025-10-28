@@ -1,2 +1,8 @@
 /target
 .env
+assets/
+context/
+data/
+matlab_*/
+*.m
+*.json

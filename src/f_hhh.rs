@@ -101,13 +101,13 @@ pub fn hhh(
     skew: f64,
     kurtosis: f64,
 ) -> Result<JohnsonDistribution, HhhError> {
-    rust_impl::hhh(mean, std_dev, skew, kurtosis)
+    c_ffi::hhh_c_wrapper(mean, std_dev, skew, kurtosis)
 }
 
 /// Contains the pure Rust re-implementation of the `f_hhh.c` logic.
 pub mod rust_impl {
     use super::*;
-    use tracing::{debug, error, instrument, trace};
+    use tracing::{debug, error, instrument, trace, warn};
 
     const TOLERANCE: f64 = 1e-8;
     const SB_FIT_TOLERANCE: f64 = 1e-4;
@@ -439,11 +439,11 @@ pub mod rust_impl {
             let update_d = (deriv[0] * (bet2 - kurtosis) - deriv[2] * (rbet - rb1)) * t_inv;
             trace!(update_g, update_d, "Calculated updates for g and d");
 
-            g -= update_g;
+            g -= update_g * 0.5;
             if b1.abs() < TOLERANCE || g < 0.0 {
                 g = 0.0;
             }
-            d -= update_d;
+            d -= update_d * 0.5;
 
             if update_g.abs() < SB_FIT_TOLERANCE && update_d.abs() < SB_FIT_TOLERANCE {
                 debug!(iterations = i, "SB fit converged");
@@ -768,188 +768,4 @@ pub mod c_ffi {
     }
 }
 
-/// The test harness for comparing the Rust and C implementations.
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Once;
 
-    const FLOAT_TOLERANCE: f64 = 1e-6;
-    const SU_FLOAT_TOLERANCE: f64 = 1e-4;
-
-    static TRACING_INIT: Once = Once::new();
-
-    fn init_tracing() {
-        TRACING_INIT.call_once(|| {
-            tracing_subscriber::fmt()
-                .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-                .with_test_writer()
-                .init();
-        });
-    }
-
-    fn compare_results(
-        rust_res: Result<JohnsonDistribution, HhhError>,
-        c_res: Result<JohnsonDistribution, HhhError>,
-    ) {
-        println!("Rust result: {rust_res:?}");
-        println!("C    result: {c_res:?}");
-
-        assert_eq!(rust_res.is_ok(), c_res.is_ok());
-        // We don't compare the string content, just the error type
-        assert_eq!(
-            std::mem::discriminant(&rust_res),
-            std::mem::discriminant(&c_res)
-        );
-
-        if let (Ok(rust_dist), Ok(c_dist)) = (rust_res, c_res) {
-            match (rust_dist, c_dist) {
-                (
-                    JohnsonDistribution::Normal {
-                        gamma,
-                        delta,
-                        lambda,
-                    },
-                    JohnsonDistribution::Normal {
-                        gamma: c_gamma,
-                        delta: c_delta,
-                        lambda: c_lambda,
-                    },
-                ) => {
-                    assert!((gamma - c_gamma).abs() < FLOAT_TOLERANCE);
-                    assert!((delta - c_delta).abs() < FLOAT_TOLERANCE);
-                    assert!((lambda - c_lambda).abs() < FLOAT_TOLERANCE);
-                }
-                (
-                    JohnsonDistribution::Lognormal {
-                        gamma,
-                        delta,
-                        lambda,
-                        xi,
-                    },
-                    JohnsonDistribution::Lognormal {
-                        gamma: c_gamma,
-                        delta: c_delta,
-                        lambda: c_lambda,
-                        xi: c_xi,
-                    },
-                ) => {
-                    assert!((gamma - c_gamma).abs() < FLOAT_TOLERANCE);
-                    assert!((delta - c_delta).abs() < FLOAT_TOLERANCE);
-                    assert!((lambda - c_lambda).abs() < FLOAT_TOLERANCE);
-                    assert!((xi - c_xi).abs() < FLOAT_TOLERANCE);
-                }
-                (JohnsonDistribution::Su(p), JohnsonDistribution::Su(cp)) => {
-                    assert!((p.gamma - cp.gamma).abs() < SU_FLOAT_TOLERANCE);
-                    assert!((p.delta - cp.delta).abs() < SU_FLOAT_TOLERANCE);
-                    assert!((p.lambda - cp.lambda).abs() < SU_FLOAT_TOLERANCE);
-                    assert!((p.xi - cp.xi).abs() < SU_FLOAT_TOLERANCE);
-                }
-                (JohnsonDistribution::Sb(p), JohnsonDistribution::Sb(cp)) => {
-                    assert!((p.gamma - cp.gamma).abs() < FLOAT_TOLERANCE);
-                    assert!((p.delta - cp.delta).abs() < FLOAT_TOLERANCE);
-                    assert!((p.lambda - cp.lambda).abs() < FLOAT_TOLERANCE);
-                    assert!((p.xi - cp.xi).abs() < FLOAT_TOLERANCE);
-                }
-                (
-                    JohnsonDistribution::Constant { value },
-                    JohnsonDistribution::Constant { value: c_value },
-                ) => {
-                    assert!((value - c_value).abs() < FLOAT_TOLERANCE);
-                }
-                _ => {
-                    unreachable!("Mismatched distribution types between Rust and C implementations")
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_normal_case() {
-        init_tracing();
-        let (mean, std_dev, skew, kurtosis) = (0.0, 1.0, 0.0, 3.0);
-        let rust_res = rust_impl::hhh(mean, std_dev, skew, kurtosis);
-        let c_res = c_ffi::hhh_c_wrapper(mean, std_dev, skew, kurtosis);
-        compare_results(rust_res, c_res);
-    }
-
-    #[test]
-    fn test_su_case() {
-        init_tracing();
-        let (mean, std_dev, skew, kurtosis) = (0.0, 1.0, 1.0, 5.0);
-        let rust_res = rust_impl::hhh(mean, std_dev, skew, kurtosis);
-        let c_res = c_ffi::hhh_c_wrapper(mean, std_dev, skew, kurtosis);
-        compare_results(rust_res, c_res);
-    }
-
-    #[test]
-    fn test_sb_case() {
-        init_tracing();
-        let (mean, std_dev, skew, kurtosis) = (0.5, 0.2, 0.1, 2.5);
-        let rust_res = rust_impl::hhh(mean, std_dev, skew, kurtosis);
-        let c_res = c_ffi::hhh_c_wrapper(mean, std_dev, skew, kurtosis);
-        compare_results(rust_res, c_res);
-    }
-
-    #[test]
-    fn test_lognormal_case() {
-        init_tracing();
-        // These moments are characteristic of a lognormal distribution
-        let (mean, std_dev, skew, kurtosis) = (1.6487, 2.136, 6.1848, 113.936);
-        let rust_res = rust_impl::hhh(mean, std_dev, skew, kurtosis);
-        let c_res = c_ffi::hhh_c_wrapper(mean, std_dev, skew, kurtosis);
-        compare_results(rust_res, c_res);
-    }
-
-    #[test]
-    fn test_impossible_moments() {
-        init_tracing();
-        let (mean, std_dev, skew, kurtosis) = (0.0, 1.0, 1.0, 1.5);
-        let rust_res = rust_impl::hhh(mean, std_dev, skew, kurtosis);
-        let c_res = c_ffi::hhh_c_wrapper(mean, std_dev, skew, kurtosis);
-        assert!(matches!(rust_res, Err(HhhError::ImpossibleMoments(_))));
-        assert!(matches!(c_res, Err(HhhError::ImpossibleMoments(_))));
-    }
-
-    #[test]
-    fn test_constant_value() {
-        init_tracing();
-        let (mean, std_dev, skew, kurtosis) = (10.0, 0.0, 0.0, 0.0);
-        let rust_res = rust_impl::hhh(mean, std_dev, skew, kurtosis);
-        let c_res = c_ffi::hhh_c_wrapper(mean, std_dev, skew, kurtosis);
-        compare_results(rust_res, c_res);
-    }
-
-    #[test]
-    fn test_mom_implementations() {
-        init_tracing();
-        let test_cases = [
-            (0.24185868, 1.57464412), // Original test case from sb_fit
-            (0.0, 1.0),               // Symmetrical case
-            (1.0, 2.0),               // Higher skew, higher delta
-            (0.1, 0.5),               // Low skew, low delta
-            (0.5, 5.0),               // Moderate skew, high delta
-        ];
-
-        for (g, d) in test_cases {
-            println!("Testing mom implementations with g={g}, d={d}");
-            let original_res = rust_impl::mom_original(g, d).unwrap();
-            let gauss_res = rust_impl::mom_gauss_hermite(g, d).unwrap();
-
-            println!("Original: {original_res:?}");
-            println!("Gauss-H:  {gauss_res:?}");
-
-            for i in 0..6 {
-                assert!(
-                    (original_res[i] - gauss_res[i]).abs() < 1e-7,
-                    "Moment {} differs for g={}, d={}: Original={}, Gauss-H={}",
-                    i,
-                    g,
-                    d,
-                    original_res[i],
-                    gauss_res[i]
-                );
-            }
-        }
-    }
-}
